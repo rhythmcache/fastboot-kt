@@ -281,6 +281,28 @@ class FastbootConnectionTest {
     }
 
     @Test
+    fun `download handles null-byte padded DATA size response`() = runTest {
+        val payload = ByteArray(16) { 0xAA.toByte() }
+        val transport = MockTransport()
+        transport.expectWrite("download:00000010")
+        // Real USB devices send 64-byte responses padded with null bytes
+        val paddedDataResp = "DATA00000010".toByteArray(Charsets.UTF_8) + ByteArray(52) { 0x00 }
+        transport.enqueueRead(paddedDataResp)
+        transport.enqueueRead("OKAY")
+
+        val conn = FastbootConnection(transport)
+        conn.executeDownload(
+            size = 16,
+            source = { offset, dest, destOffset, length ->
+                System.arraycopy(payload, offset.toInt(), dest, destOffset, length)
+                length
+            },
+        )
+
+        transport.assertAllConsumed()
+    }
+
+    @Test
     fun `download FAIL response throws DeviceFail`() = runTest {
         val transport = MockTransport()
         transport.expectWrite("download:00000100")

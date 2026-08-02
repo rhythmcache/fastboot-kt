@@ -11,7 +11,7 @@ import java.nio.file.Path
 class FastbootClient(
     private val connection: FastbootConnection,
 ) : Closeable {
-    enum class RebootTarget(internal val wire: String?) {
+    enum class RebootTarget(val wire: String?) {
         SYSTEM(null),
         BOOTLOADER("bootloader"),
         RECOVERY("recovery"),

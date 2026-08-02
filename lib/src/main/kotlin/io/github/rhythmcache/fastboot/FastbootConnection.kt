@@ -147,15 +147,17 @@ class FastbootConnection(
             }
         if (n <= 0) throw FastbootException.Io("Status read failed: EOF")
 
-        val text = buf.decodeToString(0, n)
+        val text = buf.decodeToString(0, n).substringBefore('\u0000')
+
         return when {
             text.startsWith("INFO") -> RawResponse.Info(text.substring(4))
             text.startsWith("OKAY") -> RawResponse.Okay(text.substring(4))
             text.startsWith("FAIL") -> RawResponse.Fail(text.substring(4))
             text.startsWith("TEXT") -> RawResponse.Text(text.substring(4))
             text.startsWith("DATA") -> {
-                val hex = text.substring(4)
-                val size = hex.toLongOrNull(16) ?: throw FastbootException.Protocol("Invalid DATA size field: $hex")
+                val hex = text.substring(4).trim()
+                val size = hex.toLongOrNull(16)
+                    ?: throw FastbootException.Protocol("Invalid DATA size field: '$hex'")
                 if (size > FastbootConst.MAX_DOWNLOAD_SIZE) throw FastbootException.Protocol("Data size too large ($size)")
                 RawResponse.Data(size)
             }
