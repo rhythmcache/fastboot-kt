@@ -11,8 +11,7 @@ package io.github.rhythmcache.fastboot
  *   4. Call [assertAllConsumed] to verify everything was used.
  */
 class MockTransport : FastbootTransport {
-
-    //  write side 
+    //  write side
     private val expectedWrites = ArrayDeque<ByteArray>()
 
     /** Enqueue an expected write payload (exact byte match). */
@@ -24,7 +23,7 @@ class MockTransport : FastbootTransport {
         expectedWrites.addLast(data)
     }
 
-    //  read side 
+    //  read side
     private val readQueue = ArrayDeque<ByteArray>()
 
     /** Enqueue a response that the device "sends". */
@@ -36,7 +35,7 @@ class MockTransport : FastbootTransport {
         readQueue.addLast(data)
     }
 
-    //  actual write log (for flexible assertions) 
+    //  actual write log (for flexible assertions)
     private val _writtenChunks = mutableListOf<ByteArray>()
 
     /** Every raw byte array that was written, in order. */
@@ -45,9 +44,13 @@ class MockTransport : FastbootTransport {
     /** All written bytes concatenated — handy for data-phase assertions. */
     val allWrittenBytes: ByteArray get() = _writtenChunks.fold(byteArrayOf()) { acc, b -> acc + b }
 
-    //  Transport implementation 
+    //  Transport implementation
 
-    override fun write(buffer: ByteArray, offset: Int, length: Int) {
+    override fun write(
+        buffer: ByteArray,
+        offset: Int,
+        length: Int,
+    ) {
         val payload = buffer.copyOfRange(offset, offset + length)
         _writtenChunks.add(payload)
 
@@ -57,13 +60,17 @@ class MockTransport : FastbootTransport {
                 throw AssertionError(
                     "MockTransport write mismatch:\n" +
                         "  expected: ${expected.toString(Charsets.UTF_8)}\n" +
-                        "  actual:   ${payload.toString(Charsets.UTF_8)}"
+                        "  actual:   ${payload.toString(Charsets.UTF_8)}",
                 )
             }
         }
     }
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override fun read(
+        buffer: ByteArray,
+        offset: Int,
+        length: Int,
+    ): Int {
         if (readQueue.isEmpty()) {
             throw AssertionError("MockTransport: read() called but no data was enqueued")
         }
@@ -79,7 +86,7 @@ class MockTransport : FastbootTransport {
 
     override fun close() {}
 
-    //  verification 
+    //  verification
 
     fun assertAllConsumed() {
         check(expectedWrites.isEmpty()) {

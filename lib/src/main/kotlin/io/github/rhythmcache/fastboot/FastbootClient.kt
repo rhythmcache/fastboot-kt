@@ -182,15 +182,22 @@ class FastbootClient(
 
     // Upload / Fetch
 
-    suspend fun upload(onProgress: ((Progress) -> Unit)? = null): ByteArray =
-        connection.executeUpload(Commands.UPLOAD, onProgress = onProgress).first
+    suspend fun upload(
+        sink: (data: ByteArray, length: Int) -> Unit,
+        onProgress: ((Progress) -> Unit)? = null,
+    ) {
+        connection.executeUpload(Commands.UPLOAD, sink, onProgress = onProgress)
+    }
 
     suspend fun fetch(
         partition: String,
+        sink: (data: ByteArray, length: Int) -> Unit,
         offset: Long? = null,
         size: Long? = null,
         onProgress: ((Progress) -> Unit)? = null,
-    ): ByteArray = connection.executeUpload(Commands.fetch(partition, offset, size), onProgress = onProgress).first
+    ) {
+        connection.executeUpload(Commands.fetch(partition, offset, size), sink, onProgress = onProgress)
+    }
 
     // Erase
 

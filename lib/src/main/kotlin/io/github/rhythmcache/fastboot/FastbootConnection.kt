@@ -39,7 +39,7 @@ class FastbootConnection(
                         is RawResponse.Okay -> return@withContext FastbootResult(resp.message, infoLines)
                         is RawResponse.Fail -> throw FastbootException.DeviceFail("remote: '${resp.message}'")
                         is RawResponse.Data -> throw FastbootException.Protocol(
-                            "Unexpected DATA response in rawCommand (no data phase handler)"
+                            "Unexpected DATA response in rawCommand (no data phase handler)",
                         )
                     }
                 }
@@ -60,7 +60,7 @@ class FastbootConnection(
     ): FastbootResult {
         if (size <= 0 || size.toULong() > FastbootConst.MAX_DOWNLOAD_SIZE.toULong()) {
             throw FastbootException.BadArgument(
-                "Download size out of range (got $size, max ${FastbootConst.MAX_DOWNLOAD_SIZE})"
+                "Download size out of range (got $size, max ${FastbootConst.MAX_DOWNLOAD_SIZE})",
             )
         }
         return mutex.withLock {
@@ -83,9 +83,10 @@ class FastbootConnection(
      */
     internal suspend fun executeUpload(
         cmd: String,
+        sink: (data: ByteArray, length: Int) -> Unit,
         chunkSize: Int = 1024 * 1024,
         onProgress: ((Progress) -> Unit)? = null,
-    ): Pair<ByteArray, FastbootResult> =
+    ): FastbootResult =
         mutex.withLock {
             withContext(Dispatchers.IO) {
                 writeCommand(cmd)
@@ -99,13 +100,33 @@ class FastbootConnection(
                 if (size <= 0) {
                     throw FastbootException.Protocol("$cmd request failed, device reports $size bytes available")
                 }
-                if (size > Int.MAX_VALUE.toLong()) {
-                    throw FastbootException.BadArgument("Transfer too large to fit in memory ($size bytes)")
-                }
-                val data = recvChunked(size, chunkSize, onProgress)
-                data to readTerminalLocked(buf)
+                recvChunked(size, chunkSize, sink, onProgress)
+                readTerminalLocked(buf)
             }
         }
+
+    private fun recvChunked(
+        size: Long,
+        chunkSize: Int,
+        sink: (data: ByteArray, length: Int) -> Unit,
+        onProgress: ((Progress) -> Unit)?,
+    ) {
+        val chunk = ByteArray(chunkSize)
+        var received = 0L
+        while (received < size) {
+            val want = minOf(chunkSize.toLong(), size - received).toInt()
+            val n =
+                try {
+                    transport.read(chunk, 0, want)
+                } catch (e: Exception) {
+                    throw FastbootException.Io("Read from device failed in recvChunked()", e)
+                }
+            if (n <= 0) throw FastbootException.Io("Unexpected EOF while reading data phase")
+            sink(chunk, n)
+            received += n
+            onProgress?.invoke(Progress(received, size))
+        }
+    }
 
     private fun writeCommand(cmd: String) {
         val bytes = cmd.toByteArray(Charsets.UTF_8)
@@ -156,8 +177,9 @@ class FastbootConnection(
             text.startsWith("TEXT") -> RawResponse.Text(text.substring(4))
             text.startsWith("DATA") -> {
                 val hex = text.substring(4).trim()
-                val size = hex.toLongOrNull(16)
-                    ?: throw FastbootException.Protocol("Invalid DATA size field: '$hex'")
+                val size =
+                    hex.toLongOrNull(16)
+                        ?: throw FastbootException.Protocol("Invalid DATA size field: '$hex'")
                 if (size > FastbootConst.MAX_DOWNLOAD_SIZE) throw FastbootException.Protocol("Data size too large ($size)")
                 RawResponse.Data(size)
             }
@@ -186,29 +208,6 @@ class FastbootConnection(
             sent += n
             onProgress?.invoke(Progress(sent, total))
         }
-    }
-
-    /** Reads exactly [size] bytes, preallocated once since size is known upfront and bounded to Int.MAX_VALUE. */
-    private fun recvChunked(
-        size: Long,
-        chunkSize: Int,
-        onProgress: ((Progress) -> Unit)?,
-    ): ByteArray {
-        val out = ByteArray(size.toInt())
-        var received = 0
-        while (received < out.size) {
-            val want = minOf(chunkSize, out.size - received)
-            val n =
-                try {
-                    transport.read(out, received, want)
-                } catch (e: Exception) {
-                    throw FastbootException.Io("Read from device failed in recvChunked()", e)
-                }
-            if (n <= 0) throw FastbootException.Io("Unexpected EOF while reading data phase")
-            received += n
-            onProgress?.invoke(Progress(received.toLong(), size))
-        }
-        return out
     }
 
     fun waitForDisconnect() = transport.waitForDisconnect()

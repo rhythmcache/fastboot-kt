@@ -8,7 +8,6 @@ import kotlin.test.assertEquals
  * wire strings that match the official AOSP constants.h definitions.
  */
 class CommandsTest {
-
     @Test
     fun `getVar formats correctly`() {
         assertEquals("getvar:version", Commands.getVar("version"))
