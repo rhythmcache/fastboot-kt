@@ -38,7 +38,9 @@ class FastbootConnection(
                         is RawResponse.Text -> onText?.invoke(resp.message)
                         is RawResponse.Okay -> return@withContext FastbootResult(resp.message, infoLines)
                         is RawResponse.Fail -> throw FastbootException.DeviceFail("remote: '${resp.message}'")
-                        is RawResponse.Data -> return@withContext FastbootResult(resp.size.toString(16), infoLines)
+                        is RawResponse.Data -> throw FastbootException.Protocol(
+                            "Unexpected DATA response in rawCommand (no data phase handler)"
+                        )
                     }
                 }
                 @Suppress("UNREACHABLE_CODE")
@@ -55,8 +57,13 @@ class FastbootConnection(
         source: (offset: Long, dest: ByteArray, destOffset: Int, length: Int) -> Int,
         chunkSize: Int = 1024 * 1024,
         onProgress: ((Progress) -> Unit)? = null,
-    ): FastbootResult =
-        mutex.withLock {
+    ): FastbootResult {
+        if (size <= 0 || size.toULong() > FastbootConst.MAX_DOWNLOAD_SIZE.toULong()) {
+            throw FastbootException.BadArgument(
+                "Download size out of range (got $size, max ${FastbootConst.MAX_DOWNLOAD_SIZE})"
+            )
+        }
+        return mutex.withLock {
             withContext(Dispatchers.IO) {
                 writeCommand(Commands.download(size))
                 val buf = ByteArray(FastbootConst.RESPONSE_MAX_SIZE)
@@ -69,6 +76,7 @@ class FastbootConnection(
                 readTerminalLocked(buf)
             }
         }
+    }
 
     /**
      * Runs a full DATA-phase receive cycle: command, size ack, bytes, terminal - under one lock.
@@ -200,6 +208,8 @@ class FastbootConnection(
         }
         return out
     }
+
+    fun waitForDisconnect() = transport.waitForDisconnect()
 
     override fun close() {
         closed = true

@@ -277,6 +277,9 @@ class FastbootClient(
         onInfo: ((String) -> Unit)? = null,
     ): FastbootResult = connection.rawCommand(cmd, onInfo = onInfo)
 
+    /** Blocks until the device disconnects */
+    fun waitForDisconnect() = connection.waitForDisconnect()
+
     val isClosed: Boolean get() = connection.isClosed
 
     override fun close() = connection.close()

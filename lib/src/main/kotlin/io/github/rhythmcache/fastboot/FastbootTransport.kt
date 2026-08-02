@@ -17,5 +17,15 @@ interface FastbootTransport : Closeable {
         length: Int,
     ): Int
 
+    /** Resets the transport connection. Default is a no-op. */
+    fun reset() {}
+
+    /**
+     * Blocks until the transport disconnects.
+     * Transports that don't support this return immediately.
+     * Default is a no-op.
+     */
+    fun waitForDisconnect() {}
+
     override fun close()
 }
