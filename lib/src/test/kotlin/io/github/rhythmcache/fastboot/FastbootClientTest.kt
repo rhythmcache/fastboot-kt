@@ -135,6 +135,31 @@ class FastbootClientTest {
         }
 
     //
+    //  stage (in-memory)
+    //
+
+    @Test
+    fun `stage sends download command and payload without trailing boot or flash`() =
+        runTest {
+            val payload = ByteArray(32) { (it + 1).toByte() }
+            val transport = MockTransport()
+            transport.expectWrite("download:00000020") // 32 = 0x20
+            transport.enqueueRead("DATA00000020")
+            transport.enqueueRead("OKAY")
+
+            val client = buildClient(transport)
+            val result = client.stage(payload)
+
+            assertEquals("", result.response)
+
+            val chunks = transport.writtenChunks
+            assertEquals("download:00000020", chunks[0].toString(Charsets.UTF_8))
+            val sentData = chunks.subList(1, chunks.size).fold(byteArrayOf()) { acc, b -> acc + b }
+            assertTrue(payload.contentEquals(sentData))
+            transport.assertAllConsumed()
+        }
+
+    //
     //  reboot variants
     //
 

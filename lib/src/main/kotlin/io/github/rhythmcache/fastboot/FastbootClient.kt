@@ -135,6 +135,41 @@ class FastbootClient(
         return connection.rawCommand(Commands.BOOT, onInfo = onInfo)
     }
 
+    // Stage uploads an image to the device's RAM buffer without flashing or booting. Mirrors 'fastboot stage <image>'.
+
+    /** Stages [image] into device RAM without flashing or booting. */
+    suspend fun stage(
+        image: ByteArray,
+        onProgress: ((Progress) -> Unit)? = null,
+    ): FastbootResult = download(image.size.toLong(), byteArraySource(image), onProgress)
+
+    /** Stages [file] into device RAM without flashing or booting. */
+    suspend fun stage(
+        file: File,
+        onProgress: ((Progress) -> Unit)? = null,
+    ): FastbootResult {
+        return RandomAccessFile(file, "r").use { raf ->
+            download(raf.length(), randomAccessFileSource(raf), onProgress)
+        }
+    }
+
+    /** Stages [path] into device RAM without flashing or booting. */
+    suspend fun stage(
+        path: Path,
+        onProgress: ((Progress) -> Unit)? = null,
+    ): FastbootResult = stage(path.toFile(), onProgress)
+
+    /** Stages an image from a FileDescriptor (SAF) into device RAM without flashing or booting. */
+    suspend fun stage(
+        fd: FileDescriptor,
+        size: Long,
+        onProgress: ((Progress) -> Unit)? = null,
+    ): FastbootResult {
+        return FileInputStream(fd).use { stream ->
+            download(size, streamSource(stream), onProgress)
+        }
+    }
+
     // Internal source adapters + staging
 
     private fun byteArraySource(image: ByteArray): (Long, ByteArray, Int, Int) -> Int =
@@ -170,14 +205,14 @@ class FastbootClient(
         return total
     }
 
-    /** Stages an image without flashing/booting it -> shared by flash() and boot() overloads. */
+    /** Stages an image without flashing/booting it -> shared by flash(), boot(), and stage() overloads. */
     private suspend fun download(
         size: Long,
         source: (offset: Long, dest: ByteArray, destOffset: Int, length: Int) -> Int,
         onProgress: ((Progress) -> Unit)?,
-    ) {
+    ): FastbootResult {
         if (size <= 0) throw FastbootException.BadArgument("Image size must be greater than 0 bytes")
-        connection.executeDownload(size, source, onProgress = onProgress)
+        return connection.executeDownload(size, source, onProgress = onProgress)
     }
 
     // Upload / Fetch
