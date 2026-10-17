@@ -76,6 +76,8 @@ class FastbootClientTest {
         runTest {
             val image = ByteArray(64) { it.toByte() }
             val transport = MockTransport()
+            transport.expectWrite("getvar:max-download-size")
+            transport.enqueueRead("OKAY0x10000000")
             // download phase: command → DATA ack → (image bytes are written) → OKAY
             transport.expectWrite("download:00000040") // 64 = 0x40
             transport.enqueueRead("DATA00000040")
@@ -90,14 +92,15 @@ class FastbootClientTest {
             val result = client.flash("boot", image)
 
             assertEquals("", result.response)
-            // Verify the wire traffic: [download cmd] [image data] [flash cmd]
+            // Verify the wire traffic: [getvar:max-download-size] [download cmd] [image data] [flash cmd]
             val chunks = transport.writtenChunks
-            // First chunk = download command
-            assertEquals("download:00000040", chunks[0].toString(Charsets.UTF_8))
+            assertEquals("getvar:max-download-size", chunks[0].toString(Charsets.UTF_8))
+            // Second chunk = download command
+            assertEquals("download:00000040", chunks[1].toString(Charsets.UTF_8))
             // Last chunk = flash command
             assertEquals("flash:boot", chunks.last().toString(Charsets.UTF_8))
             // Middle chunk(s) = image data
-            val dataChunks = chunks.subList(1, chunks.size - 1)
+            val dataChunks = chunks.subList(2, chunks.size - 1)
             val sentData = dataChunks.fold(byteArrayOf()) { acc, b -> acc + b }
             assertTrue(image.contentEquals(sentData))
         }

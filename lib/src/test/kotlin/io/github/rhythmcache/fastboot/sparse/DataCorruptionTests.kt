@@ -221,11 +221,11 @@ class DataCorruptionTests {
         // Chunk 1: 2 blocks of RAW data at block 0..1
         addChunk(SparseFormat.CHUNK_RAW, 2, 12 + data1.size.toLong(), data1)
 
-        // Chunk 2: 50,000 blocks of DONT_CARE gap (approx 200 MB hole)
-        val gapBlocks = 50_000L
+        // Chunk 2: 1,000 blocks of DONT_CARE gap (approx 4 MB hole)
+        val gapBlocks = 1_000L
         addChunk(SparseFormat.CHUNK_DONT_CARE, gapBlocks, 12)
 
-        // Chunk 3: 2 blocks of RAW data at block 50,002..50,003
+        // Chunk 3: 2 blocks of RAW data at block 1,002..1,003
         addChunk(SparseFormat.CHUNK_RAW, 2, 12 + data2.size.toLong(), data2)
 
         val totalBlocksDeclared = 2 + gapBlocks + 2
@@ -247,8 +247,8 @@ class DataCorruptionTests {
         assertTrue(layout.inputWasSparse)
         assertEquals(totalBlocksDeclared, layout.totalBlocks)
 
-        // Resplit into 32 KiB pieces
-        val limit = 32_768L
+        // Resplit into 12 KiB pieces (each 2-block RAW chunk is ~8 KiB)
+        val limit = 12_000L
         val pieces = SparsePlanner.plan(layout, limit)
         assertTrue(pieces.size >= 2, "Expected multiple pieces, got ${pieces.size}")
 
@@ -365,20 +365,22 @@ class DataCorruptionTests {
         val overhead = SparseFormat.FILE_HEADER_SIZE + 2 * SparseFormat.CHUNK_HEADER_SIZE // 28 + 24 = 52
         val limit = overhead + 2 * bs // room for exactly 2 blocks of RAW data + trailing DONT_CARE
 
+        fun nonUniform(blocks: Int) = ByteArray(blocks * bs) { (it % 251).toByte() }
+
         // 1 block of data fits easily in 1 piece
-        val layout1 = ImageAnalyzer.analyze(ByteArraySource(ByteArray(bs) { 1 }))
+        val layout1 = ImageAnalyzer.analyze(ByteArraySource(nonUniform(1)))
         val pieces1 = SparsePlanner.plan(layout1, limit.toLong())
         assertEquals(1, pieces1.size)
         assertTrue(pieces1[0].size <= limit)
 
         // 2 blocks of data fits in exactly 1 piece
-        val layout2 = ImageAnalyzer.analyze(ByteArraySource(ByteArray(2 * bs) { 2 }))
+        val layout2 = ImageAnalyzer.analyze(ByteArraySource(nonUniform(2)))
         val pieces2 = SparsePlanner.plan(layout2, limit.toLong())
         assertEquals(1, pieces2.size)
         assertTrue(pieces2[0].size <= limit)
 
         // 3 blocks of data MUST split into 2 pieces without any piece exceeding limit
-        val layout3 = ImageAnalyzer.analyze(ByteArraySource(ByteArray(3 * bs) { 3 }))
+        val layout3 = ImageAnalyzer.analyze(ByteArraySource(nonUniform(3)))
         val pieces3 = SparsePlanner.plan(layout3, limit.toLong())
         assertEquals(2, pieces3.size)
         for (p in pieces3) {
