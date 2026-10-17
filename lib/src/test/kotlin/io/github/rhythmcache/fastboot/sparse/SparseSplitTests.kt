@@ -1,5 +1,7 @@
 package io.github.rhythmcache.fastboot.sparse
 
+import java.io.ByteArrayOutputStream
+import java.util.BitSet
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -103,7 +105,10 @@ class SparseSplitTests {
             when (r.nextInt(3)) {
                 0 -> {} // zeros
                 1 -> {
-                    val w = ByteArray(4).also { r.nextBytes(it); it[0] = 0x11 }
+                    val w = ByteArray(4).also {
+                        r.nextBytes(it)
+                        it[0] = 0x11
+                    }
                     for (i in b * bs until end * bs) out[i] = w[i % 4]
                 }
                 else -> {
@@ -141,7 +146,16 @@ class SparseSplitTests {
         assertEquals(301L, layout.totalBlocks)
         assertTrue(!layout.inputWasSparse)
         val expected = expectedPartition(raw, layout.totalBlocks)
-        for (limit in longArrayOf(SparsePlanner.minimumLimit(bs), 10_000, 65_536, 100_001, 500_000, 1_048_576, 5_000_000)) {
+        val limits = longArrayOf(
+            SparsePlanner.minimumLimit(bs),
+            10_000,
+            65_536,
+            100_001,
+            500_000,
+            1_048_576,
+            5_000_000,
+        )
+        for (limit in limits) {
             val pieces = SparsePlanner.plan(layout, limit)
             for (p in pieces) assertTrue(p.size <= limit, "piece ${p.size} > limit $limit")
             for (chunk in intArrayOf(1, 7, 4096, 65_536, 1 shl 20)) {
@@ -191,18 +205,31 @@ class SparseSplitTests {
     @Test
     fun testCrcChunkIsSkippedAndGapsBecomeDontCare() {
         fun le(v: Long, n: Int) = ByteArray(n) { (v ushr (8 * it)).toByte() }
-        val body = java.io.ByteArrayOutputStream()
+        val body = ByteArrayOutputStream()
         var count = 0
         fun chunk(type: Int, blocks: Long, total: Long, payload: ByteArray = ByteArray(0)) {
-            body.write(le(type.toLong(), 2)); body.write(le(0, 2)); body.write(le(blocks, 4)); body.write(le(total, 4)); body.write(payload); count++
+            body.write(le(type.toLong(), 2))
+            body.write(le(0, 2))
+            body.write(le(blocks, 4))
+            body.write(le(total, 4))
+            body.write(payload)
+            count++
         }
         chunk(0xCAC3, 2, 12) // blocks 0..1 untouched
         chunk(0xCAC1, 1, 12 + bs.toLong(), ByteArray(bs) { 7 }) // block 2
         chunk(0xCAC4, 0, 16, byteArrayOf(9, 9, 9, 9)) // CRC32, covers no blocks
         chunk(0xCAC2, 3, 16, byteArrayOf(1, 2, 3, 4)) // blocks 3..5
-        val file = java.io.ByteArrayOutputStream()
-        file.write(le(0xED26FF3AL, 4)); file.write(le(1, 2)); file.write(le(0, 2)); file.write(le(28, 2)); file.write(le(12, 2))
-        file.write(le(bs.toLong(), 4)); file.write(le(6, 4)); file.write(le(count.toLong(), 4)); file.write(le(0, 4)); file.write(body.toByteArray())
+        val file = ByteArrayOutputStream()
+        file.write(le(0xED26FF3AL, 4))
+        file.write(le(1, 2))
+        file.write(le(0, 2))
+        file.write(le(28, 2))
+        file.write(le(12, 2))
+        file.write(le(bs.toLong(), 4))
+        file.write(le(6, 4))
+        file.write(le(count.toLong(), 4))
+        file.write(le(0, 4))
+        file.write(body.toByteArray())
         val layout = ImageAnalyzer.analyze(ByteArraySource(file.toByteArray()))
         assertEquals(6L, layout.totalBlocks)
         assertEquals(2, layout.extents.size)
@@ -222,7 +249,7 @@ class SparseSplitTests {
             v: Long,
             n: Int,
         ) = ByteArray(n) { (v ushr (8 * it)).toByte() }
-        val body = java.io.ByteArrayOutputStream()
+        val body = ByteArrayOutputStream()
         var count = 0
 
         fun chunk(
@@ -231,16 +258,29 @@ class SparseSplitTests {
             total: Long,
             payload: ByteArray = ByteArray(0),
         ) {
-            body.write(le(type.toLong(), 2)); body.write(le(0, 2)); body.write(le(blocks, 4)); body.write(le(total, 4)); body.write(payload); count++
+            body.write(le(type.toLong(), 2))
+            body.write(le(0, 2))
+            body.write(le(blocks, 4))
+            body.write(le(total, 4))
+            body.write(payload)
+            count++
         }
         chunk(0xCAC1, 3, 12 + d1.size.toLong(), d1)
         chunk(0xCAC3, 5, 12)
         chunk(0xCAC2, 4, 16, byteArrayOf(1, 2, 3, 4))
         chunk(0xCAC1, 10, 12 + d2.size.toLong(), d2)
         chunk(0xCAC3, 3, 12)
-        val file = java.io.ByteArrayOutputStream()
-        file.write(le(0xED26FF3AL, 4)); file.write(le(1, 2)); file.write(le(0, 2)); file.write(le(28, 2)); file.write(le(12, 2))
-        file.write(le(bs.toLong(), 4)); file.write(le(25, 4)); file.write(le(count.toLong(), 4)); file.write(le(0, 4)); file.write(body.toByteArray())
+        val file = ByteArrayOutputStream()
+        file.write(le(0xED26FF3AL, 4))
+        file.write(le(1, 2))
+        file.write(le(0, 2))
+        file.write(le(28, 2))
+        file.write(le(12, 2))
+        file.write(le(bs.toLong(), 4))
+        file.write(le(25, 4))
+        file.write(le(count.toLong(), 4))
+        file.write(le(0, 4))
+        file.write(body.toByteArray())
         val sparse = file.toByteArray()
 
         val src = ByteArraySource(sparse)
@@ -261,15 +301,25 @@ class SparseSplitTests {
     @Test
     fun testMalformedSparseIsRejectedWithClearErrors() {
         val ok = ByteArray(64)
-        ok[0] = 0x3A; ok[1] = 0xFF.toByte(); ok[2] = 0x26; ok[3] = 0xED.toByte()
+        ok[0] = 0x3A
+        ok[1] = 0xFF.toByte()
+        ok[2] = 0x26
+        ok[3] = 0xED.toByte()
         ok[4] = 2 // major version 2
         assertFailsWith<SparseFormatException> { ImageAnalyzer.analyze(ByteArraySource(ok)) }
 
-        ok[4] = 1; ok[8] = 28; ok[10] = 12
-        ok[12] = 0; ok[13] = 0x10 // block size 4096
+        ok[4] = 1
+        ok[8] = 28
+        ok[10] = 12
+        ok[12] = 0
+        ok[13] = 0x10 // block size 4096
         ok[16] = 1 // total_blks
         ok[20] = 1 // one chunk declared
-        ok[28] = 0xC1.toByte(); ok[29] = 0xCA.toByte(); ok[32] = 1; ok[36] = 0xFF.toByte(); ok[37] = 0x1F // claims 8 KiB, file is 64 bytes
+        ok[28] = 0xC1.toByte()
+        ok[29] = 0xCA.toByte()
+        ok[32] = 1
+        ok[36] = 0xFF.toByte()
+        ok[37] = 0x1F // claims 8 KiB, file is 64 bytes
         assertFailsWith<SparseFormatException> { ImageAnalyzer.analyze(ByteArraySource(ok)) }
     }
 
@@ -330,22 +380,32 @@ class SparseSplitTests {
         val pieces = SparsePlanner.plan(layout, limit)
         assertEquals(7, pieces.size) // 3.2 GB / 512 MiB = 6.4 => 7
         var covered = 0L
-        val seen = java.util.BitSet(layout.totalBlocks.toInt())
+        val seen = BitSet(layout.totalBlocks.toInt())
         for ((i, p) in pieces.withIndex()) {
             assertTrue(p.size <= limit, "piece $i is ${p.size}")
             assertTrue(i == pieces.size - 1 || p.size > limit - 3 * bs, "piece $i should be nearly full")
             // walk chunk headers without reading payloads
             val h = ByteArray(28)
             p.read(src, 0, h, 0, 28)
-            assertEquals(layout.totalBlocks, (h[16].toLong() and 0xFF) or ((h[17].toLong() and 0xFF) shl 8) or ((h[18].toLong() and 0xFF) shl 16) or ((h[19].toLong() and 0xFF) shl 24))
+            val declaredBlocks = (h[16].toLong() and 0xFF) or
+                ((h[17].toLong() and 0xFF) shl 8) or
+                ((h[18].toLong() and 0xFF) shl 16) or
+                ((h[19].toLong() and 0xFF) shl 24)
+            assertEquals(layout.totalBlocks, declaredBlocks)
             var pos = 28L
             val ch = ByteArray(12)
             var block = 0L
             while (pos < p.size) {
                 p.read(src, pos, ch, 0, 12)
                 val type = (ch[0].toInt() and 0xFF) or ((ch[1].toInt() and 0xFF) shl 8)
-                val blocks = (ch[4].toLong() and 0xFF) or ((ch[5].toLong() and 0xFF) shl 8) or ((ch[6].toLong() and 0xFF) shl 16) or ((ch[7].toLong() and 0xFF) shl 24)
-                val total = (ch[8].toLong() and 0xFF) or ((ch[9].toLong() and 0xFF) shl 8) or ((ch[10].toLong() and 0xFF) shl 16) or ((ch[11].toLong() and 0xFF) shl 24)
+                val blocks = (ch[4].toLong() and 0xFF) or
+                    ((ch[5].toLong() and 0xFF) shl 8) or
+                    ((ch[6].toLong() and 0xFF) shl 16) or
+                    ((ch[7].toLong() and 0xFF) shl 24)
+                val total = (ch[8].toLong() and 0xFF) or
+                    ((ch[9].toLong() and 0xFF) shl 8) or
+                    ((ch[10].toLong() and 0xFF) shl 16) or
+                    ((ch[11].toLong() and 0xFF) shl 24)
                 if (type == 0xCAC1) {
                     for (k in block until block + blocks) {
                         assertTrue(!seen.get(k.toInt()), "block $k written twice")
@@ -366,7 +426,10 @@ class SparseSplitTests {
         mid.read(src, 28 + 12 + 12 + 4096L * 1000, probe, 0, 4096)
         val expectedProbe = ByteArray(4096)
         // locate which source block that is: piece 3 starts after 3 full pieces; verify via word 0 instead
-        val word0 = (probe[0].toLong() and 0xFF) or ((probe[1].toLong() and 0xFF) shl 8) or ((probe[2].toLong() and 0xFF) shl 16) or ((probe[3].toLong() and 0xFF) shl 24)
+        val word0 = (probe[0].toLong() and 0xFF) or
+            ((probe[1].toLong() and 0xFF) shl 8) or
+            ((probe[2].toLong() and 0xFF) shl 16) or
+            ((probe[3].toLong() and 0xFF) shl 24)
         src.read((word0 - 1) * bs, expectedProbe, 0, 4096)
         assertContentEquals(expectedProbe, probe)
     }

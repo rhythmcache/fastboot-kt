@@ -15,8 +15,10 @@ class SparsePiece internal constructor(
 ) {
     internal class Segment(
         val length: Long,
-        val data: ByteArray?, // literal bytes (headers, fill values)
-        val fileOffset: Long, // >= 0: bytes come from the source; -1: zeros (when data == null)
+        // literal bytes (headers, fill values)
+        val data: ByteArray?,
+        // >= 0: bytes come from the source; -1: zeros (when data == null)
+        val fileOffset: Long,
     )
 
     private val starts = LongArray(segments.size)
@@ -162,7 +164,13 @@ object SparsePlanner {
 
         fun skipTo(block: Long) {
             if (block > cursor) {
-                pending.write(SparseFormat.chunkHeader(SparseFormat.CHUNK_DONT_CARE, block - cursor, SparseFormat.CHUNK_HEADER_SIZE.toLong()))
+                val hdr =
+                    SparseFormat.chunkHeader(
+                        SparseFormat.CHUNK_DONT_CARE,
+                        block - cursor,
+                        SparseFormat.CHUNK_HEADER_SIZE.toLong(),
+                    )
+                pending.write(hdr)
                 chunkCount++
                 used += SparseFormat.CHUNK_HEADER_SIZE
                 cursor = block
@@ -200,7 +208,13 @@ object SparsePlanner {
 
         fun finish(): SparsePiece {
             if (cursor < totalBlocks) {
-                pending.write(SparseFormat.chunkHeader(SparseFormat.CHUNK_DONT_CARE, totalBlocks - cursor, SparseFormat.CHUNK_HEADER_SIZE.toLong()))
+                val hdr =
+                    SparseFormat.chunkHeader(
+                        SparseFormat.CHUNK_DONT_CARE,
+                        totalBlocks - cursor,
+                        SparseFormat.CHUNK_HEADER_SIZE.toLong(),
+                    )
+                pending.write(hdr)
                 chunkCount++
                 cursor = totalBlocks
             }
