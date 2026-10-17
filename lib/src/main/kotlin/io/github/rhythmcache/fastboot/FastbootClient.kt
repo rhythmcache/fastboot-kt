@@ -1,11 +1,21 @@
 package io.github.rhythmcache.fastboot
 
+import io.github.rhythmcache.fastboot.sparse.ByteArraySource
+import io.github.rhythmcache.fastboot.sparse.FileChannelSource
+import io.github.rhythmcache.fastboot.sparse.ImageAnalyzer
+import io.github.rhythmcache.fastboot.sparse.RandomAccessSource
+import io.github.rhythmcache.fastboot.sparse.SparseFormatException
+import io.github.rhythmcache.fastboot.sparse.SparsePlanner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
 import java.nio.file.Path
 
 class FastbootClient(
@@ -27,9 +37,28 @@ class FastbootClient(
 
     enum class SnapshotCommand(val wire: String) { Cancel("cancel"), Merge("merge") }
 
+    companion object {
+        /** Largest piece ever sent in one download, matching AOSP fastboot's RESPARSE_LIMIT (1 GiB). */
+        const val MAX_CHUNK_SIZE: Long = 1L shl 30
+
+        /** Piece size used when the device does not report a usable `max-download-size` (AOSP would not split at all). */
+        const val DEFAULT_CHUNK_SIZE: Long = 256L shl 20
+    }
+
     // Variables
 
     suspend fun getVar(key: String): String = connection.rawCommand(Commands.getVar(key)).response
+
+    /**
+     * The device's `max-download-size`, or null if it is missing, unparsable or the query fails with FAIL.
+     * Parsed like AOSP fastboot: surrounding whitespace is ignored, a `0x` prefix means hex, anything else decimal.
+     */
+    suspend fun getMaxDownloadSize(): Long? =
+        try {
+            parseDeviceSize(getVar("max-download-size"))
+        } catch (e: FastbootException.DeviceFail) {
+            null
+        }
 
     suspend fun getAllVars(): Map<String, String> {
         val vars = LinkedHashMap<String, String>()
@@ -41,6 +70,10 @@ class FastbootClient(
     }
 
     // Flashing ->> the main user facing entry points. download() is internal.
+    //
+    // Every flash() overload asks the device for max-download-size first (unless [maxChunkSize] is given,
+    // like `fastboot -S`). An image that fits is sent as is. A larger one is converted/resplit into
+    // self-contained Android sparse pieces that each fit, and every piece is downloaded then flashed in order.
 
     /** Flash [partition] from an in memory image. */
     suspend fun flash(
@@ -48,7 +81,12 @@ class FastbootClient(
         image: ByteArray,
         onInfo: ((String) -> Unit)? = null,
         onProgress: ((Progress) -> Unit)? = null,
+        maxChunkSize: Long? = null,
     ): FastbootResult {
+        val limit = resolveChunkLimit(maxChunkSize)
+        if (image.size.toLong() > limit) {
+            return flashSplit(partition, ByteArraySource(image), limit, onInfo, onProgress)
+        }
         download(image.size.toLong(), byteArraySource(image), onProgress)
         return connection.rawCommand(Commands.flash(partition), onInfo = onInfo)
     }
@@ -59,9 +97,15 @@ class FastbootClient(
         file: File,
         onInfo: ((String) -> Unit)? = null,
         onProgress: ((Progress) -> Unit)? = null,
+        maxChunkSize: Long? = null,
     ): FastbootResult {
+        val limit = resolveChunkLimit(maxChunkSize)
         RandomAccessFile(file, "r").use { raf ->
-            download(raf.length(), randomAccessFileSource(raf), onProgress)
+            val size = raf.length()
+            if (size > limit) {
+                return flashSplit(partition, FileChannelSource(raf.channel, size), limit, onInfo, onProgress)
+            }
+            download(size, randomAccessFileSource(raf), onProgress)
         }
         return connection.rawCommand(Commands.flash(partition), onInfo = onInfo)
     }
@@ -72,17 +116,27 @@ class FastbootClient(
         path: Path,
         onInfo: ((String) -> Unit)? = null,
         onProgress: ((Progress) -> Unit)? = null,
-    ): FastbootResult = flash(partition, path.toFile(), onInfo, onProgress)
+        maxChunkSize: Long? = null,
+    ): FastbootResult = flash(partition, path.toFile(), onInfo, onProgress, maxChunkSize)
 
-    /** Flash [partition] from a FileDescriptor (let say resolved from a SAF content:// URI). Reads sequentially. */
+    /**
+     * Flash [partition] from a FileDescriptor (let say resolved from a SAF content:// URI).
+     * An image that fits in one download is read sequentially (works on pipes too). A larger image needs
+     * positional reads, so the descriptor must be seekable; otherwise this throws [FastbootException.BadArgument].
+     */
     suspend fun flash(
         partition: String,
         fd: FileDescriptor,
         size: Long,
         onInfo: ((String) -> Unit)? = null,
         onProgress: ((Progress) -> Unit)? = null,
+        maxChunkSize: Long? = null,
     ): FastbootResult {
+        val limit = resolveChunkLimit(maxChunkSize)
         FileInputStream(fd).use { stream ->
+            if (size > limit) {
+                return flashSplit(partition, seekableSource(stream.channel, size), limit, onInfo, onProgress)
+            }
             download(size, streamSource(stream), onProgress)
         }
         return connection.rawCommand(Commands.flash(partition), onInfo = onInfo)
@@ -203,6 +257,78 @@ class FastbootClient(
             total += n
         }
         return total
+    }
+
+    /** Per-piece limit: the caller's override if given, else the device's max-download-size; always capped at [MAX_CHUNK_SIZE]. */
+    private suspend fun resolveChunkLimit(override: Long?): Long {
+        if (override != null) {
+            if (override <= 0) throw FastbootException.BadArgument("maxChunkSize must be greater than 0")
+            return minOf(override, MAX_CHUNK_SIZE)
+        }
+        return minOf(getMaxDownloadSize() ?: DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE)
+    }
+
+    private fun seekableSource(
+        channel: FileChannel,
+        size: Long,
+    ): RandomAccessSource {
+        try {
+            FileChannelSource.requireSeekable(channel)
+        } catch (e: IOException) {
+            throw FastbootException.BadArgument(
+                "This image is larger than the device's download limit and has to be flashed in pieces, " +
+                    "but the file is not seekable (${e.message}). Copy it to local storage and try again.",
+            )
+        }
+        return FileChannelSource(channel, size)
+    }
+
+    /**
+     * Converts/resplits [src] into sparse pieces of at most [limit] bytes and flashes them in order.
+     * A failure aborts the loop, like AOSP fastboot; pieces already flashed stay on the device.
+     */
+    private suspend fun flashSplit(
+        partition: String,
+        src: RandomAccessSource,
+        limit: Long,
+        onInfo: ((String) -> Unit)?,
+        onProgress: ((Progress) -> Unit)?,
+    ): FastbootResult {
+        onInfo?.invoke("Scanning image for chunked flash of '$partition' (max ${limit / 1024} KB per chunk)...")
+        val pieces =
+            try {
+                withContext(Dispatchers.IO) { SparsePlanner.plan(ImageAnalyzer.analyze(src), limit) }
+            } catch (e: SparseFormatException) {
+                throw FastbootException.BadArgument("Invalid sparse image: ${e.message}")
+            } catch (e: IllegalArgumentException) {
+                throw FastbootException.BadArgument(e.message ?: "Chunk limit too small")
+            } catch (e: IOException) {
+                throw FastbootException.Io("Failed to read image: ${e.message}", e)
+            }
+
+        val total = pieces.sumOf { it.size }
+        var done = 0L
+        var last = FastbootResult("", emptyList())
+        for ((i, piece) in pieces.withIndex()) {
+            val n = i + 1
+            onInfo?.invoke("Sending sparse '$partition' $n/${pieces.size} (${piece.size / 1024} KB)")
+            val base = done
+            connection.executeDownload(
+                piece.size,
+                { offset, dest, destOffset, length ->
+                    try {
+                        piece.read(src, offset, dest, destOffset, length)
+                    } catch (e: IOException) {
+                        throw FastbootException.Io("Failed to read image data at $offset: ${e.message}", e)
+                    }
+                },
+                onProgress = { p -> onProgress?.invoke(Progress(base + p.current, total)) },
+            )
+            done += piece.size
+            onInfo?.invoke("Writing '$partition' $n/${pieces.size}")
+            last = connection.rawCommand(Commands.flash(partition), onInfo = onInfo)
+        }
+        return last
     }
 
     /** Stages an image without flashing/booting it -> shared by flash(), boot(), and stage() overloads. */
