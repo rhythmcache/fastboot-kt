@@ -1,5 +1,6 @@
 package io.github.rhythmcache.fastboot.sparse
 
+import java.io.ByteArrayOutputStream
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -26,6 +27,7 @@ class DataCorruptionTests {
         partition: ByteArray,
     ): Long {
         fun u16(o: Int) = (img[o].toInt() and 0xFF) or ((img[o + 1].toInt() and 0xFF) shl 8)
+
         fun u32(o: Int) = (u16(o).toLong()) or (u16(o + 2).toLong() shl 16)
 
         assertEquals(0xED26FF3AL, u32(0), "magic must match SPARSE_HEADER_MAGIC")
@@ -71,7 +73,11 @@ class DataCorruptionTests {
         return totalBlks
     }
 
-    private fun readAllBytes(piece: SparsePiece, src: RandomAccessSource, readStep: Int): ByteArray {
+    private fun readAllBytes(
+        piece: SparsePiece,
+        src: RandomAccessSource,
+        readStep: Int,
+    ): ByteArray {
         val out = ByteArray(piece.size.toInt())
         var pos = 0
         val buf = ByteArray(readStep)
@@ -190,11 +196,20 @@ class DataCorruptionTests {
         val data1 = ByteArray(bs * 2).also { r.nextBytes(it) }
         val data2 = ByteArray(bs * 2).also { r.nextBytes(it) }
 
-        fun le(v: Long, n: Int) = ByteArray(n) { (v ushr (8 * it)).toByte() }
-        val body = java.io.ByteArrayOutputStream()
+        fun le(
+            v: Long,
+            n: Int,
+        ): ByteArray = ByteArray(n) { (v ushr (8 * it)).toByte() }
+
+        val body = ByteArrayOutputStream()
         var chunkCount = 0
 
-        fun addChunk(type: Int, blocks: Long, total: Long, payload: ByteArray = ByteArray(0)) {
+        fun addChunk(
+            type: Int,
+            blocks: Long,
+            total: Long,
+            payload: ByteArray = ByteArray(0),
+        ) {
             body.write(le(type.toLong(), 2))
             body.write(le(0, 2))
             body.write(le(blocks, 4))
@@ -214,7 +229,7 @@ class DataCorruptionTests {
         addChunk(SparseFormat.CHUNK_RAW, 2, 12 + data2.size.toLong(), data2)
 
         val totalBlocksDeclared = 2 + gapBlocks + 2
-        val fileStream = java.io.ByteArrayOutputStream()
+        val fileStream = ByteArrayOutputStream()
         fileStream.write(le(0xED26FF3AL, 4))
         fileStream.write(le(1, 2))
         fileStream.write(le(0, 2))
@@ -282,6 +297,7 @@ class DataCorruptionTests {
 
             // Header checks
             fun u16(o: Int) = (bytes[o].toInt() and 0xFF) or ((bytes[o + 1].toInt() and 0xFF) shl 8)
+
             fun u32(o: Int) = (u16(o).toLong()) or (u16(o + 2).toLong() shl 16)
 
             assertEquals(0xED26FF3AL, u32(0), "magic in piece $idx")

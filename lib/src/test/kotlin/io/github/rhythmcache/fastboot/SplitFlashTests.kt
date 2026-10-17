@@ -90,10 +90,10 @@ class SplitFlashTests {
     fun testRawFileLargerThanLimitIsFlashedInPiecesAndPartitionMatches() {
         val img = image(blocks = 900, tail = 321, dense = true) // ~3.6 MB, limit 1 MiB
         val dev = FakeBootloader(maxDownload = 0x100000, maxDownloadReply = "0x100000", partitionSize = 4 shl 20)
-        val f = File.createTempFile("img", ".bin").also {
-            it.writeBytes(img)
-            it.deleteOnExit()
-        }
+        val f = File.createTempFile("img", ".bin")
+        f.writeBytes(img)
+        f.deleteOnExit()
+
         val infos = ArrayList<String>()
         val progress = ArrayList<Pair<Long, Long>>()
         runBlocking {
@@ -122,11 +122,15 @@ class SplitFlashTests {
     fun testFileDescriptorPathMatchesFileDescriptorFromSaf() {
         val img = image(blocks = 700, tail = 0, seed = 4, dense = true)
         val dev = FakeBootloader(0x80000, "0x80000", partitionSize = 4 shl 20)
-        val f = File.createTempFile("img", ".bin").also {
-            it.writeBytes(img)
-            it.deleteOnExit()
+        val f = File.createTempFile("img", ".bin")
+        f.writeBytes(img)
+        f.deleteOnExit()
+
+        FileInputStream(f).use {
+            runBlocking {
+                client(dev).flash("system", it.fd, img.size.toLong())
+            }
         }
-        FileInputStream(f).use { runBlocking { client(dev).flash("system", it.fd, img.size.toLong()) } }
         assertTrue(dev.downloadSizes.all { it <= 0x80000 })
         assertContentEquals(expectedPartition(img, dev.partition.size), dev.partition)
     }
@@ -193,7 +197,8 @@ class SplitFlashTests {
         fun le(
             v: Long,
             n: Int,
-        ) = ByteArray(n) { (v ushr (8 * it)).toByte() }
+        ): ByteArray = ByteArray(n) { (v ushr (8 * it)).toByte() }
+
         val body = ByteArrayOutputStream()
         body.write(le(0xCAC1, 2))
         body.write(le(0, 2))
@@ -226,10 +231,10 @@ class SplitFlashTests {
         val sparse = file.toByteArray()
 
         val dev = FakeBootloader(0x100000, "0x100000", partitionSize = (1024 + 256 + 64) * bs)
-        val f = File.createTempFile("sparse", ".img").also {
-            it.writeBytes(sparse)
-            it.deleteOnExit()
-        }
+        val f = File.createTempFile("sparse", ".img")
+        f.writeBytes(sparse)
+        f.deleteOnExit()
+
         runBlocking { client(dev).flash("system", f) }
 
         assertTrue(dev.downloadSizes.size >= 4)
@@ -249,7 +254,10 @@ class SplitFlashTests {
         bad[3] = 0xED.toByte()
         bad[4] = 9 // unsupported major version
         val dev = FakeBootloader(0x100000, "0x100000", partitionSize = 4 shl 20)
-        val e = assertFailsWith<FastbootException.BadArgument> { runBlocking { client(dev).flash("system", bad) } }
+        val e =
+            assertFailsWith<FastbootException.BadArgument> {
+                runBlocking { client(dev).flash("system", bad) }
+            }
         assertTrue(e.message!!.contains("Invalid sparse image"), e.message)
         assertTrue(dev.downloadSizes.isEmpty(), "nothing must be sent for an invalid image")
     }
@@ -262,17 +270,19 @@ class SplitFlashTests {
         val mk = ProcessBuilder("mkfifo", fifo.path).start().waitFor()
         if (mk != 0) return // not on Linux; nothing to check
         fifo.deleteOnExit()
-        val writer = Thread {
-            FileOutputStream(fifo).use { it.write(ByteArray(10)) }
-        }.also {
-            it.isDaemon = true
-            it.start()
-        }
+        val writer =
+            Thread {
+                FileOutputStream(fifo).use { it.write(ByteArray(10)) }
+            }.also {
+                it.isDaemon = true
+                it.start()
+            }
         val dev = FakeBootloader(0x1000, "0x1000", partitionSize = 1 shl 20)
         FileInputStream(fifo).use { fis ->
-            val e = assertFailsWith<FastbootException.BadArgument> {
-                runBlocking { client(dev).flash("system", fis.fd, 1_000_000L) }
-            }
+            val e =
+                assertFailsWith<FastbootException.BadArgument> {
+                    runBlocking { client(dev).flash("system", fis.fd, 1_000_000L) }
+                }
             assertTrue(e.message!!.contains("not seekable"), e.message)
         }
         writer.join(2000)
@@ -282,9 +292,10 @@ class SplitFlashTests {
     @Test
     fun testLimitSmallerThanOneBlockOfSparseOverheadIsReportedNotLooped() {
         val dev = FakeBootloader(1000, "1000", partitionSize = 1 shl 20)
-        val e = assertFailsWith<FastbootException.BadArgument> {
-            runBlocking { client(dev).flash("system", ByteArray(100_000) { it.toByte() }) }
-        }
+        val e =
+            assertFailsWith<FastbootException.BadArgument> {
+                runBlocking { client(dev).flash("system", ByteArray(100_000) { it.toByte() }) }
+            }
         assertTrue(e.message!!.contains("too small"), e.message)
     }
 
@@ -294,7 +305,11 @@ class SplitFlashTests {
             var flashes = 0
             val queued = ArrayDeque<ByteArray>()
 
-            override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            override fun write(
+                buffer: ByteArray,
+                offset: Int,
+                length: Int,
+            ) {
                 val cmd = if (length < 64) String(buffer, offset, length) else ""
                 if (cmd.startsWith("flash:") && ++flashes == 2) {
                     queued.addLast("FAILwrite error".toByteArray())
@@ -303,7 +318,11 @@ class SplitFlashTests {
                 inner.write(buffer, offset, length)
             }
 
-            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            override fun read(
+                buffer: ByteArray,
+                offset: Int,
+                length: Int,
+            ): Int {
                 val q = queued.removeFirstOrNull() ?: return inner.read(buffer, offset, length)
                 System.arraycopy(q, 0, buffer, offset, q.size)
                 return q.size
@@ -312,9 +331,10 @@ class SplitFlashTests {
         val img = image(blocks = 800, seed = 13, dense = true)
         val dev = FakeBootloader(0x100000, "0x100000", partitionSize = 4 shl 20)
         val wrapper = FailingSecondFlash(dev)
-        val e = assertFailsWith<FastbootException.DeviceFail> {
-            runBlocking { FastbootClient(FastbootConnection(wrapper)).flash("system", img) }
-        }
+        val e =
+            assertFailsWith<FastbootException.DeviceFail> {
+                runBlocking { FastbootClient(FastbootConnection(wrapper)).flash("system", img) }
+            }
         assertEquals("remote: 'write error'", e.message)
         assertEquals(2, dev.downloadSizes.size, "third piece must not be attempted after the second flash failed")
     }

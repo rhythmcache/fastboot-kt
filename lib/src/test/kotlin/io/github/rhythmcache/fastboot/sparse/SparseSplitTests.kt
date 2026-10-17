@@ -19,6 +19,12 @@ class SparseSplitTests {
     private val bs = 4096
     private val sentinel: Byte = 0x5A
 
+    private fun u16(b: ByteArray, o: Int): Int =
+        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+
+    private fun u32(b: ByteArray, o: Int): Long =
+        (u16(b, o).toLong()) or (u16(b, o + 2).toLong() shl 16)
+
     // ---- independent decoder -------------------------------------------------------------
 
     /** Applies a sparse image to [partition] like a bootloader would. Returns total_blks from the header. */
@@ -26,22 +32,19 @@ class SparseSplitTests {
         img: ByteArray,
         partition: ByteArray,
     ): Long {
-        fun u16(o: Int) = (img[o].toInt() and 0xFF) or ((img[o + 1].toInt() and 0xFF) shl 8)
-
-        fun u32(o: Int) = (u16(o).toLong()) or (u16(o + 2).toLong() shl 16)
-        assertEquals(0xED26FF3AL, u32(0), "magic")
-        assertEquals(1, u16(4))
-        assertEquals(28, u16(8))
-        assertEquals(12, u16(10))
-        val blk = u32(12).toInt()
-        val totalBlks = u32(16)
-        val chunks = u32(20)
+        assertEquals(0xED26FF3AL, u32(img, 0), "magic")
+        assertEquals(1, u16(img, 4))
+        assertEquals(28, u16(img, 8))
+        assertEquals(12, u16(img, 10))
+        val blk = u32(img, 12).toInt()
+        val totalBlks = u32(img, 16)
+        val chunks = u32(img, 20)
         var pos = 28
         var block = 0L
         for (c in 0 until chunks) {
-            val type = u16(pos)
-            val blocks = u32(pos + 4)
-            val total = u32(pos + 8)
+            val type = u16(img, pos)
+            val blocks = u32(img, pos + 4)
+            val total = u32(img, pos + 8)
             when (type) {
                 0xCAC1 -> {
                     assertEquals(12 + blocks * blk, total, "raw chunk size")
@@ -105,10 +108,9 @@ class SparseSplitTests {
             when (r.nextInt(3)) {
                 0 -> {} // zeros
                 1 -> {
-                    val w = ByteArray(4).also {
-                        r.nextBytes(it)
-                        it[0] = 0x11
-                    }
+                    val w = ByteArray(4)
+                    r.nextBytes(w)
+                    w[0] = 0x11
                     for (i in b * bs until end * bs) out[i] = w[i % 4]
                 }
                 else -> {
@@ -146,15 +148,16 @@ class SparseSplitTests {
         assertEquals(301L, layout.totalBlocks)
         assertTrue(!layout.inputWasSparse)
         val expected = expectedPartition(raw, layout.totalBlocks)
-        val limits = longArrayOf(
-            SparsePlanner.minimumLimit(bs),
-            10_000,
-            65_536,
-            100_001,
-            500_000,
-            1_048_576,
-            5_000_000,
-        )
+        val limits =
+            longArrayOf(
+                SparsePlanner.minimumLimit(bs),
+                10_000,
+                65_536,
+                100_001,
+                500_000,
+                1_048_576,
+                5_000_000,
+            )
         for (limit in limits) {
             val pieces = SparsePlanner.plan(layout, limit)
             for (p in pieces) assertTrue(p.size <= limit, "piece ${p.size} > limit $limit")
@@ -204,10 +207,20 @@ class SparseSplitTests {
 
     @Test
     fun testCrcChunkIsSkippedAndGapsBecomeDontCare() {
-        fun le(v: Long, n: Int) = ByteArray(n) { (v ushr (8 * it)).toByte() }
+        fun le(
+            v: Long,
+            n: Int,
+        ): ByteArray = ByteArray(n) { (v ushr (8 * it)).toByte() }
+
         val body = ByteArrayOutputStream()
         var count = 0
-        fun chunk(type: Int, blocks: Long, total: Long, payload: ByteArray = ByteArray(0)) {
+
+        fun chunk(
+            type: Int,
+            blocks: Long,
+            total: Long,
+            payload: ByteArray = ByteArray(0),
+        ) {
             body.write(le(type.toLong(), 2))
             body.write(le(0, 2))
             body.write(le(blocks, 4))
@@ -248,7 +261,8 @@ class SparseSplitTests {
         fun le(
             v: Long,
             n: Int,
-        ) = ByteArray(n) { (v ushr (8 * it)).toByte() }
+        ): ByteArray = ByteArray(n) { (v ushr (8 * it)).toByte() }
+
         val body = ByteArrayOutputStream()
         var count = 0
 
@@ -387,25 +401,16 @@ class SparseSplitTests {
             // walk chunk headers without reading payloads
             val h = ByteArray(28)
             p.read(src, 0, h, 0, 28)
-            val declaredBlocks = (h[16].toLong() and 0xFF) or
-                ((h[17].toLong() and 0xFF) shl 8) or
-                ((h[18].toLong() and 0xFF) shl 16) or
-                ((h[19].toLong() and 0xFF) shl 24)
+            val declaredBlocks = u32(h, 16)
             assertEquals(layout.totalBlocks, declaredBlocks)
             var pos = 28L
             val ch = ByteArray(12)
             var block = 0L
             while (pos < p.size) {
                 p.read(src, pos, ch, 0, 12)
-                val type = (ch[0].toInt() and 0xFF) or ((ch[1].toInt() and 0xFF) shl 8)
-                val blocks = (ch[4].toLong() and 0xFF) or
-                    ((ch[5].toLong() and 0xFF) shl 8) or
-                    ((ch[6].toLong() and 0xFF) shl 16) or
-                    ((ch[7].toLong() and 0xFF) shl 24)
-                val total = (ch[8].toLong() and 0xFF) or
-                    ((ch[9].toLong() and 0xFF) shl 8) or
-                    ((ch[10].toLong() and 0xFF) shl 16) or
-                    ((ch[11].toLong() and 0xFF) shl 24)
+                val type = u16(ch, 0)
+                val blocks = u32(ch, 4)
+                val total = u32(ch, 8)
                 if (type == 0xCAC1) {
                     for (k in block until block + blocks) {
                         assertTrue(!seen.get(k.toInt()), "block $k written twice")
@@ -426,10 +431,7 @@ class SparseSplitTests {
         mid.read(src, 28 + 12 + 12 + 4096L * 1000, probe, 0, 4096)
         val expectedProbe = ByteArray(4096)
         // locate which source block that is: piece 3 starts after 3 full pieces; verify via word 0 instead
-        val word0 = (probe[0].toLong() and 0xFF) or
-            ((probe[1].toLong() and 0xFF) shl 8) or
-            ((probe[2].toLong() and 0xFF) shl 16) or
-            ((probe[3].toLong() and 0xFF) shl 24)
+        val word0 = u32(probe, 0)
         src.read((word0 - 1) * bs, expectedProbe, 0, 4096)
         assertContentEquals(expectedProbe, probe)
     }
