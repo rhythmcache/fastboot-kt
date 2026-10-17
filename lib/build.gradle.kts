@@ -28,7 +28,7 @@ publishing {
             from(components["java"])
             groupId = "com.github.rhythmcache"
             artifactId = "fastboot-kt"
-            version = "1.0.1"
+            version = "1.0.2"
 
             pom {
                 name.set("fastboot-kt")
