@@ -28,4 +28,4 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run Tests
-        run: ./gradlew check --no-daemon
+        run: ./gradlew test --no-daemon
