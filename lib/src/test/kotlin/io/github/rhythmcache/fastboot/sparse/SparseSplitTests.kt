@@ -19,11 +19,9 @@ class SparseSplitTests {
     private val bs = 4096
     private val sentinel: Byte = 0x5A
 
-    private fun u16(b: ByteArray, o: Int): Int =
-        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+    private fun u16(b: ByteArray, o: Int): Int = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
 
-    private fun u32(b: ByteArray, o: Int): Long =
-        (u16(b, o).toLong()) or (u16(b, o + 2).toLong() shl 16)
+    private fun u32(b: ByteArray, o: Int): Long = (u16(b, o).toLong()) or (u16(b, o + 2).toLong() shl 16)
 
     // ---- independent decoder -------------------------------------------------------------
 
