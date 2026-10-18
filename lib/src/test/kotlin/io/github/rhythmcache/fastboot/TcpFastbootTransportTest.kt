@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  */
 class TcpFastbootTransportTest {
 
-    private fun withMockServer(
+    private inline fun withMockServer(
         block: (server: ServerSocket, port: Int) -> Unit,
     ) {
         val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
