@@ -21,6 +21,7 @@ import java.nio.file.Path
 class FastbootClient(
     private val connection: FastbootConnection,
 ) : Closeable {
+    constructor(transport: FastbootTransport) : this(FastbootConnection(transport))
     enum class RebootTarget(val wire: String?) {
         SYSTEM(null),
         BOOTLOADER("bootloader"),
@@ -38,6 +39,21 @@ class FastbootClient(
     enum class SnapshotCommand(val wire: String) { Cancel("cancel"), Merge("merge") }
 
     companion object {
+        /** Connects to a Fastboot over TCP device and returns a [FastbootClient]. */
+        fun connectTcp(
+            host: String,
+            port: Int = TcpFastbootTransport.DEFAULT_PORT,
+            timeoutMs: Int = TcpFastbootTransport.DEFAULT_HANDSHAKE_TIMEOUT_MS,
+        ): FastbootClient =
+            FastbootClient(
+                TcpFastbootTransport.connect(
+                    host = host,
+                    port = port,
+                    connectTimeoutMs = timeoutMs,
+                    handshakeTimeoutMs = timeoutMs,
+                ),
+            )
+
         /** Largest piece ever sent in one download, matching AOSP fastboot's RESPARSE_LIMIT (1 GiB). */
         const val MAX_CHUNK_SIZE: Long = 1L shl 30
 
